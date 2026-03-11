@@ -11,8 +11,8 @@ def generate_launch_description():
         ),
         Node(
             package='simple_bridge',
-            executable='cmd_publisher',
-            name='cmd_publisher',
+            executable='scan_right',
+            name='scan_right',
             output='screen'
         )
     ])

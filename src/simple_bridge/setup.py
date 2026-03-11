@@ -28,7 +28,7 @@ setup(
     entry_points={
         'console_scripts': [
             'simple_bridge = simple_bridge.simple_bridge:main',
-            'cmd_publisher = simple_bridge.cmd_publisher:main',
+            'scan_right = simple_bridge.scan_right_republisher:main'
         ],
     },
 )
