@@ -9,10 +9,13 @@ import threading
 import json
 import time
 import math
+from tf2_ros import TransformBroadcaster
+from geometry_msgs.msg import TransformStamped
 
 class SimpleBridge(Node):
     def __init__(self):
         super().__init__('simple_bridge')
+        self.tf_broadcaster = TransformBroadcaster(self)
         
         self.sensor_port = 8081
         self.cmd_port = 8082
@@ -116,6 +119,17 @@ class SimpleBridge(Node):
         
         odom.twist.twist.linear.x = twist.get('linear_x', 0.0)
         odom.twist.twist.angular.z = twist.get('angular_z', 0.0)
+
+        t = TransformStamped()
+        t.header.stamp = current_time.to_msg()
+        t.header.frame_id = 'odom'
+        t.child_frame_id = 'base_footprint'
+        t.transform.translation.x = self.x
+        t.transform.translation.y = self.y
+        t.transform.translation.z = 0.0
+        t.transform.rotation.z = math.sin(imu_theta/2.0)
+        t.transform.rotation.w = math.cos(imu_theta/2.0)
+        self.tf_broadcaster.sendTransform(t)
         
         self.odom_pub.publish(odom)
 
