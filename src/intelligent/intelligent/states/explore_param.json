@@ -1,6 +1,6 @@
 {
-    "desired_distance": 2.5,
+    "desired_distance": 3.5,
     "tolerance": 1.0,
     "left": 10,
-    "right": 30
+    "right": 10
 }
