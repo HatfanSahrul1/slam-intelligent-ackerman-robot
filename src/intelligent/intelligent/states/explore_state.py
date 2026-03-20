@@ -54,20 +54,31 @@ class ExploreState(State):
             self.node.cmd_pub.publish(twist)
             return
 
-        # Ganti min dengan rata-rata
         avg_dist_right = sum(valid_ranges) / len(valid_ranges)
         distance_error = avg_dist_right - self.desired_distance
 
         self.node.get_logger().info(f"Avg right: {avg_dist_right:.2f}, error: {distance_error:.2f}")
 
+        # Tentukan target sudut berdasarkan error (dalam radian)
+        if distance_error < -self.tolerance:   # terlalu dekat -> belok kiri
+            target_angle = self.node.current_yaw + math.radians(self.left_angle)
+        elif distance_error > self.tolerance:  # terlalu jauh -> belok kanan
+            target_angle = self.node.current_yaw - math.radians(self.right_angle)
+        else:
+            target_angle = self.node.current_yaw
+
+        # Normalisasi target angle ke [-pi, pi]
+        target_angle = math.atan2(math.sin(target_angle), math.cos(target_angle))
+        angle_error = target_angle - self.node.current_yaw
+        angle_error = math.atan2(math.sin(angle_error), math.cos(angle_error))
+
         twist = Twist()
         twist.linear.x = 0.2  # maju konstan
 
-        # Gunakan ambang batas (tolerance) untuk menentukan arah belok
-        if distance_error < -self.tolerance:   # terlalu dekat -> belok kiri
-            twist.angular.z = -0.3
-        elif distance_error > self.tolerance:  # terlalu jauh -> belok kanan
-            twist.angular.z = 0.3
+        # Kontrol proporsional kecepatan angular
+        angular_gain = 0.5
+        if abs(angle_error) > self.angle_tolerance:
+            twist.angular.z = angular_gain * angle_error
         else:
             twist.angular.z = 0.0
 

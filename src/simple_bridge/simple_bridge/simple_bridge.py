@@ -9,24 +9,28 @@ import threading
 import json
 import time
 import math
+import os
 from tf2_ros import TransformBroadcaster
 from geometry_msgs.msg import TransformStamped
 
 class SimpleBridge(Node):
     def __init__(self):
         super().__init__('simple_bridge')
-        self.tf_broadcaster = TransformBroadcaster(self)
         
+        # Load calibration factors from JSON config
+        self.odom_scale_linear = 1.0
+        self.odom_scale_angular = 1.0
+        self.load_config()
+        
+        self.tf_broadcaster = TransformBroadcaster(self)
         self.sensor_port = 8081
         self.cmd_port = 8082
-        
         self.sensor_conn = None
         self.cmd_conn = None
         
         self.cmd_sub = self.create_subscription(Twist, '/cmd_vel', self.cmd_callback, 10)
-        
         self.odom_pub = self.create_publisher(Odometry, '/odom', 10)
-        self.scan_pub = self.create_publisher(LaserScan, '/scan', 10)  # tambahan
+        self.scan_pub = self.create_publisher(LaserScan, '/scan', 10)
         
         self.x = 0.0
         self.y = 0.0
@@ -41,6 +45,17 @@ class SimpleBridge(Node):
         self.cmd_thread.start()
         
         self.get_logger().info('Simple Bridge siap. Menunggu Unity...')
+
+    def load_config(self):
+        config_path = os.path.expanduser('/slam_ws/ws/src/simple_bridge/config/bridge_params.json')
+        try:
+            with open(config_path, 'r') as f:
+                params = json.load(f)
+                self.odom_scale_linear = params.get('odom_scale_linear', 1.0)
+                self.odom_scale_angular = params.get('odom_scale_angular', 1.0)
+                self.get_logger().info(f'Loaded params: linear_scale={self.odom_scale_linear}, angular_scale={self.odom_scale_angular}')
+        except Exception as e:
+            self.get_logger().warn(f'Gagal load params: {e}. Menggunakan default scale=1.0')
 
     def sensor_server(self):
         server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -76,14 +91,10 @@ class SimpleBridge(Node):
                     if line.strip():
                         try:
                             msg = json.loads(line)
-                            # self.get_logger().info(f'Dari Unity: twist={msg.get("twist")}, imu={msg.get("imu")}')
-                            
                             if 'twist' in msg and 'imu' in msg:
                                 self.update_odometry(msg['twist'], msg['imu']['theta'])
-                            
                             if 'scan' in msg:
                                 self.publish_scan(msg['scan'])
-                                
                         except json.JSONDecodeError:
                             self.get_logger().warn('JSON tidak valid')
             except socket.timeout:
@@ -97,29 +108,36 @@ class SimpleBridge(Node):
     def update_odometry(self, twist, imu_theta):
         current_time = self.get_clock().now()
         dt = (current_time - self.last_time).nanoseconds / 1e9
-        
+
         if dt > 0:
-            vx = twist.get('linear_x', 0.0)
+            # Apply calibration scales BEFORE integration
+            vx_raw = twist.get('linear_x', 0.0)
+            wz_raw = twist.get('angular_z', 0.0)
+            
+            vx = vx_raw * self.odom_scale_linear
+            wz = wz_raw * self.odom_scale_angular
+            
             self.x += vx * math.cos(imu_theta) * dt
             self.y += vx * math.sin(imu_theta) * dt
-        
-        self.last_time = current_time
-        
+            self.last_time = current_time
+
         odom = Odometry()
         odom.header.stamp = current_time.to_msg()
         odom.header.frame_id = 'odom'
         odom.child_frame_id = 'base_footprint'
-        
+
         odom.pose.pose.position.x = self.x
         odom.pose.pose.position.y = self.y
         odom.pose.pose.position.z = 0.0
-        
+
         odom.pose.pose.orientation.z = math.sin(imu_theta / 2.0)
         odom.pose.pose.orientation.w = math.cos(imu_theta / 2.0)
-        
-        odom.twist.twist.linear.x = twist.get('linear_x', 0.0)
-        odom.twist.twist.angular.z = twist.get('angular_z', 0.0)
 
+        # Publish corrected twist values
+        odom.twist.twist.linear.x = twist.get('linear_x', 0.0) * self.odom_scale_linear
+        odom.twist.twist.angular.z = twist.get('angular_z', 0.0) * self.odom_scale_angular
+
+        # TF transform
         t = TransformStamped()
         t.header.stamp = current_time.to_msg()
         t.header.frame_id = 'odom'
@@ -130,13 +148,13 @@ class SimpleBridge(Node):
         t.transform.rotation.z = math.sin(imu_theta/2.0)
         t.transform.rotation.w = math.cos(imu_theta/2.0)
         self.tf_broadcaster.sendTransform(t)
-        
+
         self.odom_pub.publish(odom)
 
     def publish_scan(self, scan_data):
         scan = LaserScan()
         scan.header.stamp = self.get_clock().now().to_msg()
-        scan.header.frame_id = 'laser_frame'  # sesuaikan dengan TF nanti
+        scan.header.frame_id = 'laser_frame'
         scan.angle_min = scan_data['angle_min']
         scan.angle_max = scan_data['angle_max']
         scan.angle_increment = scan_data['angle_increment']
@@ -180,7 +198,6 @@ class SimpleBridge(Node):
                 rotasi_derajat = msg.angular.z * 180.0 / math.pi
                 cmd_str = f"{maju};{rotasi_derajat:.1f}\n"
                 self.cmd_conn.sendall(cmd_str.encode('utf-8'))
-                # self.get_logger().info(f'Kirim ke Unity: {cmd_str.strip()}')
             except Exception as e:
                 self.get_logger().warn(f'Gagal kirim command: {e}')
 
@@ -190,7 +207,6 @@ class SimpleBridge(Node):
         if self.cmd_conn:
             self.cmd_conn.close()
         super().destroy_node()
-
 
 def main(args=None):
     rclpy.init(args=args)

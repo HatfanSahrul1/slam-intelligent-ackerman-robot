@@ -24,6 +24,7 @@ setup(
     entry_points={
         'console_scripts': [
             'intelligent_node = intelligent.state_machine:main',
+            'tuning_node = intelligent.tuning_node:main',
         ],
     },
 )
