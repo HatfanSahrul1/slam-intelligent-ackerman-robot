@@ -1,6 +1,15 @@
 {
+    "mode": "odom",
+    "waypoints": [
+        [4.0, 0.0],
+        [4.0, 5.0],
+        [0.0, 5.0],
+        [0.0, 0.0]
+    ],
+    "waypoint_threshold": 0.8,
+    "linear_speed": 0.5,
     "desired_distance": 3.5,
     "tolerance": 1.0,
     "left": 10,
-    "right": 12
+    "right": 9.5
 }
