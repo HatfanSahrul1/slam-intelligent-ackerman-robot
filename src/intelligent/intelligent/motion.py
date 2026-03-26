@@ -49,4 +49,4 @@ def MoveToOdom(x_target, y_target, x_input, y_input, theta_input, threshold):
     # Clamp angular speed (ackerman punya batas belok maksimal)
     theta_output = max(-0.5, min(0.5, theta_output))
     
-    return int(0), float(0.0), bool(is_done)
+    return int(motion), float(theta_output), bool(is_done)
