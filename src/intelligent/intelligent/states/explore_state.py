@@ -8,6 +8,7 @@ class ExploreState(State):
     def __init__(self, node):
         super().__init__(node)
         self.node.get_logger().info("ExploreState: Initialized")
+        self.is_done_executing = False
         
         # Load parameters
         param_file = "/slam_ws/ws/src/intelligent/intelligent/states/explore_param.json"
@@ -75,11 +76,14 @@ class ExploreState(State):
             threshold=self.wp_threshold
         )
 
-        self.node.get_logger().info(f"Pos Current [{self.node.current_pose.x}, {self.node.current_pose.y}, {self.node.current_yaw}]")
+        self.node.get_logger().info(f"Pos Current [{self.current_wp_index}][{self.node.current_pose.x:.3f}, {self.node.current_pose.y:.3f}, {self.node.current_yaw:.3f}]")
 
         if is_done:
             self.node.get_logger().info(f"Waypoint {self.current_wp_index} REACHED!")
-            self.current_wp_index += 1
+            if self.current_wp_index >= len(self.waypoints):
+                self.is_done_executing = True
+            else:
+                self.current_wp_index += 1
             return
 
         # Kirim command ke robot
@@ -135,5 +139,8 @@ class ExploreState(State):
 
         self.node.cmd_pub.publish(twist)
 
+    def is_done(self):
+        return self.is_done_executing
+
     def next_state(self):
-        return None
+        return "analyze"

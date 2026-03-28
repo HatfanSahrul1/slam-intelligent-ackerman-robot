@@ -7,6 +7,7 @@ class OrbitState(State):
     def __init__(self, node):
         super().__init__(node)
         self.node.get_logger().info("OrbitState: Mengorbit objek")
+        self.is_done_executing = False
 
     def on_enter(self):
         self.center = self.node.object_center
@@ -57,6 +58,9 @@ class OrbitState(State):
     def stop_robot(self):
         twist = Twist()
         self.node.cmd_pub.publish(twist)
+
+    def is_done(self):
+        return self.is_done_executing
 
     def next_state(self):
         # Setelah selesai orbit, bisa kembali ke explore atau berhenti

@@ -8,6 +8,7 @@ class ApproachState(State):
     def __init__(self, node):
         super().__init__(node)
         self.node.get_logger().info("ApproachState: Menuju orbit")
+        self.is_done_executing = False
 
     def on_enter(self):
         self.target_reached = False
@@ -61,6 +62,9 @@ class ApproachState(State):
         twist.angular.z = angular_gain * angle_diff
 
         self.node.cmd_pub.publish(twist)
+
+    def is_done(self):
+        return self.is_done_executing
 
     def next_state(self):
         if self.target_reached:

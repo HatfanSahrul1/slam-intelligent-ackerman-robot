@@ -8,6 +8,7 @@ class AnalyzeState(State):
     def __init__(self, node):
         super().__init__(node)
         self.node.get_logger().info("AnalyzeState: Menganalisis kontur")
+        self.is_done_executing = False
 
     def on_enter(self):
         # Hentikan robot
@@ -131,6 +132,10 @@ class AnalyzeState(State):
             marker_orbit.points.append(p)
         marker_pub.publish(marker_orbit)
 
+    def is_done(self):
+        return self.is_done_executing
+
     def next_state(self):
         # Setelah analisis selesai, pindah ke ApproachState
         return "approach"
+        # return None
