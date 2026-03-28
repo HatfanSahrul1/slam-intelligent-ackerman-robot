@@ -20,6 +20,11 @@ class State(ABC):
         pass
 
     @abstractmethod
+    def is_done(self):
+        """Cek kalau sudah"""
+        return False
+
+    @abstractmethod
     def next_state(self):
         """Tentukan state berikutnya (return string nama state atau None)"""
         return None
