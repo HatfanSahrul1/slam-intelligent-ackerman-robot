@@ -7,6 +7,11 @@ import math
 import time
 import json
 import os
+import sys
+
+# ✅ IMPORT MoveToOdom FUNCTION
+sys.path.insert(0, '/slam_ws/ws/src/intelligent')
+from intelligent.motion import MoveToOdom
 
 class TuningNode(Node):
     def __init__(self):
@@ -18,11 +23,15 @@ class TuningNode(Node):
         self.start_time = None
         self.forward_duration = 5.0
         self.turn_duration = 5.0
-        self.linear_speed_cmd = 1.0   # trigger untuk maju (nilai >0)
-        self.angular_speed_cmd = 0.5  # trigger untuk belok
+        self.linear_speed_cmd = 1.0
+        self.angular_speed_cmd = 0.5
         self.odom_positions = []
         self.odom_yaws = []
         self.current_odom = None
+        
+        # ✅ WAYPOINT UNTUK FORWARD MODE (menggunakan MoveToOdom)
+        self.forward_waypoint = [2.0, 0.0]  # Maju lurus 5 meter di sumbu X
+        
         self.get_logger().info('Tuning node siap. Pastikan robot di Unity sudah siap.')
         self.tuning_timer = self.create_timer(2.0, self.start_tuning_callback)
 
@@ -36,7 +45,6 @@ class TuningNode(Node):
         yaw = math.atan2(siny_cosp, cosy_cosp)
         self.odom_positions.append((x, y))
         self.odom_yaws.append(yaw)
-        self.get_logger().info(f"Odom: x={x:.3f}, y={y:.3f}, yaw={yaw:.3f}")
 
     def control_loop(self):
         if self.state == 'idle':
@@ -46,24 +54,44 @@ class TuningNode(Node):
             self.odom_positions.clear()
             self.odom_yaws.clear()
             self.state = 'forward'
-            self.get_logger().info("Mulai maju lurus selama {} detik".format(self.forward_duration))
+            self.get_logger().info(f"Maju ke waypoint {self.forward_waypoint} menggunakan MoveToOdom")
         elif self.state == 'forward':
-            elapsed = time.time() - self.start_time
-            if elapsed < self.forward_duration:
+            # ✅ GUNAKAN MoveToOdom UNTUK NAVIGASI
+            if self.current_odom is not None:
+                x = self.current_odom.pose.pose.position.x
+                y = self.current_odom.pose.pose.position.y
+                q = self.current_odom.pose.pose.orientation
+                siny_cosp = 2 * (q.w * q.z)
+                cosy_cosp = 1 - 2 * (q.z * q.z)
+                yaw = math.atan2(siny_cosp, cosy_cosp)
+                
+                motion, angular_cmd, is_done = MoveToOdom(
+                    x_target=self.forward_waypoint[0],
+                    y_target=self.forward_waypoint[1],
+                    x_input=x,
+                    y_input=y,
+                    theta_input=yaw,
+                    threshold=0.3  # Toleransi 30 cm
+                )
+                
                 twist = Twist()
-                twist.linear.x = self.linear_speed_cmd
+                twist.linear.x = 0.2 if motion == 1 else 0.0  # Speed konstan saat maju
+                twist.angular.z = angular_cmd
                 self.cmd_pub.publish(twist)
+                
+                if is_done:
+                    self.state = 'forward_done'
+                    self.get_logger().info("Waypoint tercapai. Catat ground truth dari Unity.")
+                    self.prompt_for_factor('linear')
             else:
-                self.cmd_pub.publish(Twist())
-                self.state = 'forward_done'
-                self.get_logger().info("Selesai maju. Catat posisi ground truth dari Unity.")
-                self.prompt_for_factor('linear')
+                self.get_logger().warn("Menunggu odometry...")
+                
         elif self.state == 'turn_start':
             self.start_time = time.time()
             self.odom_positions.clear()
             self.odom_yaws.clear()
             self.state = 'turn'
-            self.get_logger().info("Mulai belok sambil maju selama {} detik".format(self.turn_duration))
+            self.get_logger().info(f"Mulai belok sambil maju selama {self.turn_duration} detik")
         elif self.state == 'turn':
             elapsed = time.time() - self.start_time
             if elapsed < self.turn_duration:
@@ -90,12 +118,12 @@ class TuningNode(Node):
             self.get_logger().info(f"Jarak tempuh menurut odom ROS: {dist_odom:.3f} m")
             try:
                 gt_dist = float(input("Masukkan jarak tempuh dari Unity (ground truth) dalam meter: "))
-                if gt_dist > 0:
+                if gt_dist > 0 and dist_odom > 0:
                     factor = gt_dist / dist_odom
                     self.get_logger().info(f"Faktor skala linear = {factor:.3f}")
                     self.save_factor('linear', factor)
-            except:
-                self.get_logger().error("Input tidak valid.")
+            except Exception as e:
+                self.get_logger().error(f"Input tidak valid: {e}")
         elif mode == 'angular':
             if not self.odom_yaws:
                 return
@@ -107,12 +135,12 @@ class TuningNode(Node):
             self.get_logger().info(f"Perubahan yaw menurut odom ROS: {delta:.3f} rad ({delta_deg:.1f} deg)")
             try:
                 gt_delta = float(input("Masukkan perubahan yaw dari Unity (ground truth) dalam radian: "))
-                if gt_delta != 0:
+                if gt_delta != 0 and delta != 0:
                     factor = gt_delta / delta
                     self.get_logger().info(f"Faktor skala angular = {factor:.3f}")
                     self.save_factor('angular', factor)
-            except:
-                self.get_logger().error("Input tidak valid.")
+            except Exception as e:
+                self.get_logger().error(f"Input tidak valid: {e}")
         if mode == 'linear':
             self.state = 'turn_start'
         elif mode == 'angular':
@@ -120,6 +148,7 @@ class TuningNode(Node):
 
     def save_factor(self, mode, factor):
         config_path = os.path.expanduser('/slam_ws/ws/src/simple_bridge/config/bridge_params.json')
+        os.makedirs(os.path.dirname(config_path), exist_ok=True)
         try:
             with open(config_path, 'r') as f:
                 params = json.load(f)
