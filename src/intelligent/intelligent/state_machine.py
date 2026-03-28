@@ -72,12 +72,13 @@ class IntelligentNode(Node):
         self.states[self.current_state].execute()
 
         # Cek transisi
-        next_state = self.states[self.current_state].next_state()
-        if next_state and next_state in self.states:
-            self.get_logger().info(f'Transisi dari {self.current_state} ke {next_state}')
-            self.states[self.current_state].on_exit()
-            self.current_state = next_state
-            self.states[self.current_state].on_enter()
+        if self.states[self.current_state].is_done():
+            next_state = self.states[self.current_state].next_state()
+            if next_state and next_state in self.states:
+                self.get_logger().info(f'Transisi dari {self.current_state} ke {next_state}')
+                self.states[self.current_state].on_exit()
+                self.current_state = next_state
+                self.states[self.current_state].on_enter()
 
 def main(args=None):
     rclpy.init(args=args)
