@@ -9,18 +9,14 @@ import threading
 import json
 import time
 import math
-import os
+
+# ✅ IMPORT UNIFIED CLASS
+from .odometry_calculator import OdometryCalculator
 from tf2_ros import TransformBroadcaster
-from geometry_msgs.msg import TransformStamped
 
 class SimpleBridge(Node):
     def __init__(self):
         super().__init__('simple_bridge')
-        
-        # Load calibration factors from JSON config
-        self.odom_scale_linear = 1.0
-        self.odom_scale_angular = 1.0
-        self.load_config()
         
         self.tf_broadcaster = TransformBroadcaster(self)
         self.sensor_port = 8081
@@ -32,9 +28,11 @@ class SimpleBridge(Node):
         self.odom_pub = self.create_publisher(Odometry, '/odom', 10)
         self.scan_pub = self.create_publisher(LaserScan, '/scan', 10)
         
-        self.x = 0.0
-        self.y = 0.0
-        self.last_time = self.get_clock().now()
+        # ✅ INITIALIZE CALCULATOR (config loaded automatically)
+        self.odom_calculator = OdometryCalculator(
+            config_path='/slam_ws/ws/src/simple_bridge/config/bridge_params.json',
+            node=self
+        )
         
         self.sensor_thread = threading.Thread(target=self.sensor_server)
         self.sensor_thread.daemon = True
@@ -45,17 +43,6 @@ class SimpleBridge(Node):
         self.cmd_thread.start()
         
         self.get_logger().info('Simple Bridge siap. Menunggu Unity...')
-
-    def load_config(self):
-        config_path = os.path.expanduser('/slam_ws/ws/src/simple_bridge/config/bridge_params.json')
-        try:
-            with open(config_path, 'r') as f:
-                params = json.load(f)
-                self.odom_scale_linear = params.get('odom_scale_linear', 1.0)
-                self.odom_scale_angular = params.get('odom_scale_angular', 1.0)
-                self.get_logger().info(f'Loaded params: linear_scale={self.odom_scale_linear}, angular_scale={self.odom_scale_angular}')
-        except Exception as e:
-            self.get_logger().warn(f'Gagal load params: {e}. Menggunakan default scale=1.0')
 
     def sensor_server(self):
         server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -92,7 +79,21 @@ class SimpleBridge(Node):
                         try:
                             msg = json.loads(line)
                             if 'twist' in msg and 'imu' in msg:
-                                self.update_odometry(msg['twist'], msg['imu']['theta'])
+                                # ✅ CALCULATE ODOMETRY
+                                current_time = self.get_clock().now()
+                                result = self.odom_calculator.update(
+                                    msg['twist'],
+                                    msg['imu']['theta'],
+                                    current_time
+                                )
+                                
+                                # ✅ PUBLISH ODOMETRY (simple_bridge handles publishing)
+                                self.odom_pub.publish(result['odom_msg'])
+                                self.tf_broadcaster.sendTransform(result['tf_msg'])
+                                
+                                # Optional: log position
+                                # self.get_logger().debug(f"Pos: x={result['x']:.2f}, y={result['y']:.2f}")
+                            
                             if 'scan' in msg:
                                 self.publish_scan(msg['scan'])
                         except json.JSONDecodeError:
@@ -104,52 +105,6 @@ class SimpleBridge(Node):
                 break
         self.get_logger().warn('Koneksi sensor putus')
         self.sensor_conn = None
-
-    def update_odometry(self, twist, imu_theta):
-        current_time = self.get_clock().now()
-        dt = (current_time - self.last_time).nanoseconds / 1e9
-
-        if dt > 0:
-            # Apply calibration scales BEFORE integration
-            vx_raw = twist.get('linear_x', 0.0)
-            wz_raw = twist.get('angular_z', 0.0)
-            
-            vx = vx_raw * self.odom_scale_linear
-            wz = wz_raw * self.odom_scale_angular
-            
-            self.x += vx * math.cos(imu_theta) * dt
-            self.y += vx * math.sin(imu_theta) * dt
-            self.last_time = current_time
-
-        odom = Odometry()
-        odom.header.stamp = current_time.to_msg()
-        odom.header.frame_id = 'odom'
-        odom.child_frame_id = 'base_footprint'
-
-        odom.pose.pose.position.x = self.x
-        odom.pose.pose.position.y = self.y
-        odom.pose.pose.position.z = 0.0
-
-        odom.pose.pose.orientation.z = math.sin(imu_theta / 2.0)
-        odom.pose.pose.orientation.w = math.cos(imu_theta / 2.0)
-
-        # Publish corrected twist values
-        odom.twist.twist.linear.x = twist.get('linear_x', 0.0) * self.odom_scale_linear
-        odom.twist.twist.angular.z = twist.get('angular_z', 0.0) * self.odom_scale_angular
-
-        # TF transform
-        t = TransformStamped()
-        t.header.stamp = current_time.to_msg()
-        t.header.frame_id = 'odom'
-        t.child_frame_id = 'base_footprint'
-        t.transform.translation.x = self.x
-        t.transform.translation.y = self.y
-        t.transform.translation.z = 0.0
-        t.transform.rotation.z = math.sin(imu_theta/2.0)
-        t.transform.rotation.w = math.cos(imu_theta/2.0)
-        self.tf_broadcaster.sendTransform(t)
-
-        self.odom_pub.publish(odom)
 
     def publish_scan(self, scan_data):
         scan = LaserScan()
