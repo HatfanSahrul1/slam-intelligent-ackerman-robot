@@ -10,7 +10,7 @@ import json
 import time
 import math
 
-# ✅ IMPORT UNIFIED CLASS
+# ✅ IMPORT MODUL EKSTERNAL
 from .odometry_calculator import OdometryCalculator
 from tf2_ros import TransformBroadcaster
 
@@ -28,11 +28,14 @@ class SimpleBridge(Node):
         self.odom_pub = self.create_publisher(Odometry, '/odom', 10)
         self.scan_pub = self.create_publisher(LaserScan, '/scan', 10)
         
-        # ✅ INITIALIZE CALCULATOR (config loaded automatically)
+        # ✅ ODOMETRY CALCULATOR (untuk mode kalkulasi, optional)
         self.odom_calculator = OdometryCalculator(
             config_path='/slam_ws/ws/src/simple_bridge/config/bridge_params.json',
             node=self
         )
+        
+        # ✅ FLAG: Gunakan ground truth odom langsung dari Unity
+        self.use_ground_truth_odom = True
         
         self.sensor_thread = threading.Thread(target=self.sensor_server)
         self.sensor_thread.daemon = True
@@ -43,6 +46,7 @@ class SimpleBridge(Node):
         self.cmd_thread.start()
         
         self.get_logger().info('Simple Bridge siap. Menunggu Unity...')
+        self.get_logger().info(f'Ground truth odom mode: {self.use_ground_truth_odom}')
 
     def sensor_server(self):
         server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -78,21 +82,21 @@ class SimpleBridge(Node):
                     if line.strip():
                         try:
                             msg = json.loads(line)
-                            if 'twist' in msg and 'imu' in msg:
-                                # ✅ CALCULATE ODOMETRY
+                            
+                            # ✅ MODE GROUND TRUTH: Publish odom langsung dari Unity
+                            if self.use_ground_truth_odom and 'odom' in msg:
+                                self.publish_ground_truth_odom(msg['odom'])
+                            
+                            # ✅ MODE KALKULASI: Hitung odom dari twist (fallback/opsional)
+                            elif 'twist' in msg and 'imu' in msg:
                                 current_time = self.get_clock().now()
                                 result = self.odom_calculator.update(
                                     msg['twist'],
                                     msg['imu']['theta'],
                                     current_time
                                 )
-                                
-                                # ✅ PUBLISH ODOMETRY (simple_bridge handles publishing)
                                 self.odom_pub.publish(result['odom_msg'])
                                 self.tf_broadcaster.sendTransform(result['tf_msg'])
-                                
-                                # Optional: log position
-                                # self.get_logger().debug(f"Pos: x={result['x']:.2f}, y={result['y']:.2f}")
                             
                             if 'scan' in msg:
                                 self.publish_scan(msg['scan'])
@@ -105,6 +109,44 @@ class SimpleBridge(Node):
                 break
         self.get_logger().warn('Koneksi sensor putus')
         self.sensor_conn = None
+
+    def publish_ground_truth_odom(self, odom_data):
+        """
+        Publish odometry langsung dari ground truth Unity.
+        Tanpa integrasi, tanpa kalkulasi tambahan.
+        """
+        current_time = self.get_clock().now()
+        
+        # Build Odometry message
+        odom = Odometry()
+        odom.header.stamp = current_time.to_msg()
+        odom.header.frame_id = 'odom'
+        odom.child_frame_id = 'base_footprint'
+        
+        # ✅ LANGSUNG PAKAI NILAI DARI UNITY
+        odom.pose.pose.position.x = float(odom_data.get('x', 0.0))
+        odom.pose.pose.position.y = float(odom_data.get('y', 0.0))
+        odom.pose.pose.position.z = 0.0
+        odom.pose.pose.orientation.z = math.sin(odom_data.get('theta', 0.0) / 2.0)
+        odom.pose.pose.orientation.w = math.cos(odom_data.get('theta', 0.0) / 2.0)
+        
+        # Twist bisa tetap dari robot (untuk kontrol) atau 0
+        odom.twist.twist.linear.x = 0.0
+        odom.twist.twist.angular.z = 0.0
+        
+        self.odom_pub.publish(odom)
+        
+        # Publish TF transform (juga langsung dari ground truth)
+        t = TransformStamped()
+        t.header.stamp = current_time.to_msg()
+        t.header.frame_id = 'odom'
+        t.child_frame_id = 'base_footprint'
+        t.transform.translation.x = odom.pose.pose.position.x
+        t.transform.translation.y = odom.pose.pose.position.y
+        t.transform.translation.z = 0.0
+        t.transform.rotation.z = odom.pose.pose.orientation.z
+        t.transform.rotation.w = odom.pose.pose.orientation.w
+        self.tf_broadcaster.sendTransform(t)
 
     def publish_scan(self, scan_data):
         scan = LaserScan()
@@ -155,6 +197,51 @@ class SimpleBridge(Node):
                 self.cmd_conn.sendall(cmd_str.encode('utf-8'))
             except Exception as e:
                 self.get_logger().warn(f'Gagal kirim command: {e}')
+
+    # ============================================================
+    # ✅ KODE LAMA DI-COMMENT (TIDAK DIHAPUS)
+    # ============================================================
+    """
+    def update_odometry(self, twist, imu_theta):
+        current_time = self.get_clock().now()
+        dt = (current_time - self.last_time).nanoseconds / 1e9
+
+        if dt > 0:
+            vx_raw = twist.get('linear_x', 0.0)
+            wz_raw = twist.get('angular_z', 0.0)
+            
+            vx = vx_raw * self.odom_scale_linear
+            wz = wz_raw * self.odom_scale_angular
+            
+            self.x += vx * math.cos(imu_theta) * dt
+            self.y += vx * math.sin(imu_theta) * dt
+            self.last_time = current_time
+
+        odom = Odometry()
+        odom.header.stamp = current_time.to_msg()
+        odom.header.frame_id = 'odom'
+        odom.child_frame_id = 'base_footprint'
+        odom.pose.pose.position.x = self.x
+        odom.pose.pose.position.y = self.y
+        odom.pose.pose.position.z = 0.0
+        odom.pose.pose.orientation.z = math.sin(imu_theta / 2.0)
+        odom.pose.pose.orientation.w = math.cos(imu_theta / 2.0)
+        odom.twist.twist.linear.x = twist.get('linear_x', 0.0) * self.odom_scale_linear
+        odom.twist.twist.angular.z = twist.get('angular_z', 0.0) * self.odom_scale_angular
+
+        t = TransformStamped()
+        t.header.stamp = current_time.to_msg()
+        t.header.frame_id = 'odom'
+        t.child_frame_id = 'base_footprint'
+        t.transform.translation.x = self.x
+        t.transform.translation.y = self.y
+        t.transform.translation.z = 0.0
+        t.transform.rotation.z = math.sin(imu_theta/2.0)
+        t.transform.rotation.w = math.cos(imu_theta/2.0)
+        self.tf_broadcaster.sendTransform(t)
+
+        self.odom_pub.publish(odom)
+    """
 
     def destroy_node(self):
         if self.sensor_conn:
