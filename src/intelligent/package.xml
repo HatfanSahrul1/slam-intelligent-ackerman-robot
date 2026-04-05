@@ -12,7 +12,6 @@
   <depend>nav_msgs</depend>
   <depend>sensor_msgs</depend>
   <depend>tf2_ros</depend>
-  <depend>tf-transformations</depend>
   <depend>visualization_msgs</depend>
 
   <test_depend>ament_copyright</test_depend>

@@ -5,7 +5,7 @@ from geometry_msgs.msg import Twist, Point
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import LaserScan
 from visualization_msgs.msg import Marker
-import tf_transformations
+import math
 from .states.explore_state import ExploreState
 from .states.analyze_state import AnalyzeState
 from .states.approach_state import ApproachState
@@ -50,10 +50,10 @@ class IntelligentNode(Node):
 
     def odom_callback(self, msg):
         self.current_pose = msg.pose.pose.position
-        # Extract yaw from quaternion
         q = msg.pose.pose.orientation
-        _, _, yaw = tf_transformations.euler_from_quaternion([q.x, q.y, q.z, q.w])
-        self.current_yaw = yaw
+        siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
+        cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
+        self.current_yaw = math.atan2(siny_cosp, cosy_cosp)
 
     def scan_callback(self, msg):
         self.latest_scan = msg

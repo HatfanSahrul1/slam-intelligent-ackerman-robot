@@ -5,10 +5,8 @@ from geometry_msgs.msg import Twist, TransformStamped
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import Imu, LaserScan
 import threading
-import json
 import time
 import math
-import socket
 from tf2_ros import TransformBroadcaster
 
 try:
@@ -22,18 +20,18 @@ class SimpleBridge(Node):
 
         if serial is None:
             self.get_logger().error(
-                'Modul pyserial tidak ditemukan. Install dengan: sudo apt install python3-serial'
+                'Modul pyserial tidak ditemukan. Install dengan: pip3 install pyserial'
             )
         
         # ========== SERIAL PORT CONFIG ==========
         # STM32: velocity input (m/s) + command output
-        self.declare_parameter('stm32_port', '/dev/ttyUSB1')
+        self.declare_parameter('stm32_port', '/dev/ttyUSB0')  # ✅ Sesuai test script Anda
         self.stm32_port = self.get_parameter('stm32_port').value
         self.stm32_baud = 115200
         self.stm32_ser = None
         
         # Arduino: IMU yaw input (degrees)
-        self.declare_parameter('arduino_port', '/dev/ttyACM0')
+        self.declare_parameter('arduino_port', '/dev/ttyUSB1')
         self.arduino_port = self.get_parameter('arduino_port').value
         self.arduino_baud = 115200
         self.arduino_ser = None
@@ -56,13 +54,6 @@ class SimpleBridge(Node):
         self.current_yaw = 0.0  # Dari Arduino IMU (radian)
         self.current_linear_vel = 0.0  # Dari STM32 (m/s)
         
-        # ========== TCP SERVER (Optional: Unity) ==========
-        self.sensor_port = 8081
-        self.cmd_port = 8082
-        self.sensor_conn = None
-        self.cmd_conn = None
-        self.use_unity_tcp = False  # Set True jika masih pakai Unity
-        
         # ========== INIT ==========
         self._init_serial_ports()
         self._start_threads()
@@ -77,7 +68,11 @@ class SimpleBridge(Node):
 
         # STM32
         try:
-            self.stm32_ser = serial.Serial(self.stm32_port, self.stm32_baud, timeout=0.1)
+            self.stm32_ser = serial.Serial(
+                port=self.stm32_port,
+                baudrate=self.stm32_baud,
+                timeout=0.1  # ✅ Sama seperti test script
+            )
             self.get_logger().info(f'STM32 connected: {self.stm32_port}')
         except Exception as e:
             self.get_logger().warn(f'STM32 tidak terhubung: {e}. Velocity akan 0.')
@@ -85,7 +80,11 @@ class SimpleBridge(Node):
         
         # Arduino
         try:
-            self.arduino_ser = serial.Serial(self.arduino_port, self.arduino_baud, timeout=0.1)
+            self.arduino_ser = serial.Serial(
+                port=self.arduino_port,
+                baudrate=self.arduino_baud,
+                timeout=0.1
+            )
             self.get_logger().info(f'Arduino connected: {self.arduino_port}')
         except Exception as e:
             self.get_logger().warn(f'Arduino tidak terhubung: {e}. IMU akan 0.')
@@ -97,39 +96,33 @@ class SimpleBridge(Node):
             self.stm32_thread = threading.Thread(target=self._read_stm32_loop)
             self.stm32_thread.daemon = True
             self.stm32_thread.start()
+            self.get_logger().info(f'STM32 read thread started: {self.stm32_port}')
         
         if self.arduino_ser:
             self.arduino_thread = threading.Thread(target=self._read_arduino_loop)
             self.arduino_thread.daemon = True
             self.arduino_thread.start()
-        
-        # Optional: TCP server untuk Unity
-        if self.use_unity_tcp:
-            self.tcp_sensor_thread = threading.Thread(target=self._tcp_sensor_server)
-            self.tcp_sensor_thread.daemon = True
-            self.tcp_sensor_thread.start()
-            
-            self.tcp_cmd_thread = threading.Thread(target=self._tcp_cmd_server)
-            self.tcp_cmd_thread.daemon = True
-            self.tcp_cmd_thread.start()
+            self.get_logger().info(f'Arduino read thread started: {self.arduino_port}')
 
     # ========== STM32: READ VELOCITY (m/s) ==========
     def _read_stm32_loop(self):
-        """Read velocity (m/s) from STM32 via UART."""
+        """Read velocity (m/s) from STM32 via UART - sama seperti test script."""
         while rclpy.ok() and self.stm32_ser:
             try:
-                if self.stm32_ser.in_waiting > 0:
-                    line = self.stm32_ser.readline().decode('utf-8', errors='ignore').strip()
+                # ✅ SAMA PERSIS DENGAN TEST SCRIPT ANDA
+                raw = self.stm32_ser.readline()
+                if raw:
+                    line = raw.decode('utf-8', errors='replace').rstrip('\r\n')
                     if line:
                         vel = self._parse_velocity(line)
                         if vel is not None:
                             self.current_linear_vel = vel
                             self.get_logger().debug(f'[STM32] Velocity: {vel:.3f} m/s')
+                else:
+                    time.sleep(0.01)  # Hindari busy loop
             except Exception as e:
                 self.get_logger().error(f'STM32 read error: {e}')
                 break
-            except Exception as e:
-                self.get_logger().error(f'STM32 general error: {e}')
             time.sleep(0.01)
 
     def _parse_velocity(self, line):
@@ -150,8 +143,9 @@ class SimpleBridge(Node):
         """Read IMU yaw (degrees) from Arduino via UART."""
         while rclpy.ok() and self.arduino_ser:
             try:
-                if self.arduino_ser.in_waiting > 0:
-                    line = self.arduino_ser.readline().decode('utf-8', errors='ignore').strip()
+                raw = self.arduino_ser.readline()
+                if raw:
+                    line = raw.decode('utf-8', errors='replace').rstrip('\r\n')
                     if line:
                         yaw_deg = self._parse_yaw(line)
                         if yaw_deg is not None:
@@ -160,11 +154,11 @@ class SimpleBridge(Node):
                             self.current_yaw = self._normalize_angle(yaw_rad)
                             self._publish_imu(self.current_yaw)
                             self.get_logger().debug(f'[Arduino] Yaw: {yaw_deg:.2f}° = {self.current_yaw:.3f} rad')
+                else:
+                    time.sleep(0.01)
             except Exception as e:
                 self.get_logger().error(f'Arduino read error: {e}')
                 break
-            except Exception as e:
-                self.get_logger().error(f'Arduino general error: {e}')
             time.sleep(0.01)
 
     def _parse_yaw(self, line):
@@ -259,104 +253,6 @@ class SimpleBridge(Node):
             except Exception as e:
                 self.get_logger().error(f'Failed to send command to STM32: {e}')
 
-    # ========== TCP SERVER (Optional: Unity) ==========
-    def _tcp_sensor_server(self):
-        """Optional: Receive sensor data from Unity via TCP (LiDAR, etc)."""
-        if not self.use_unity_tcp:
-            return
-            
-        server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        server.bind(('0.0.0.0', self.sensor_port))
-        server.listen(1)
-        server.settimeout(1.0)
-        self.get_logger().info(f'TCP sensor server di port {self.sensor_port}')
-        
-        while rclpy.ok():
-            try:
-                conn, addr = server.accept()
-                self.get_logger().info(f'Unity sensor connected dari {addr}')
-                self.sensor_conn = conn
-                self._receive_tcp_sensor_data()
-            except socket.timeout:
-                continue
-            except Exception as e:
-                self.get_logger().error(f'TCP sensor server error: {e}')
-                break
-
-    def _receive_tcp_sensor_data(self):
-        """Receive JSON sensor data from Unity (optional: LiDAR)."""
-        buffer = ''
-        self.sensor_conn.settimeout(0.1)
-        while rclpy.ok() and self.sensor_conn:
-            try:
-                data = self.sensor_conn.recv(4096).decode('utf-8')
-                if not data:
-                    break
-                buffer += data
-                while '\n' in buffer:
-                    line, buffer = buffer.split('\n', 1)
-                    if line.strip():
-                        try:
-                            msg = json.loads(line)
-                            if 'scan' in msg:
-                                self._publish_scan(msg['scan'])
-                        except json.JSONDecodeError:
-                            self.get_logger().warn('JSON tidak valid dari Unity')
-            except socket.timeout:
-                continue
-            except Exception as e:
-                self.get_logger().error(f'TCP sensor receive error: {e}')
-                break
-        self.get_logger().warn('Koneksi sensor TCP putus')
-        self.sensor_conn = None
-
-    def _tcp_cmd_server(self):
-        """Optional: Send commands to Unity via TCP."""
-        if not self.use_unity_tcp:
-            return
-            
-        server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        server.bind(('0.0.0.0', self.cmd_port))
-        server.listen(1)
-        server.settimeout(1.0)
-        self.get_logger().info(f'TCP command server di port {self.cmd_port}')
-        
-        while rclpy.ok():
-            try:
-                conn, addr = server.accept()
-                self.get_logger().info(f'Unity command connected dari {addr}')
-                self.cmd_conn = conn
-                self._send_tcp_commands()
-            except socket.timeout:
-                continue
-            except Exception as e:
-                self.get_logger().error(f'TCP command server error: {e}')
-                break
-
-    def _send_tcp_commands(self):
-        """Optional: Forward commands to Unity."""
-        self.cmd_conn.settimeout(0.1)
-        while rclpy.ok() and self.cmd_conn:
-            try:
-                time.sleep(0.1)
-            except socket.timeout:
-                continue
-
-    def _publish_scan(self, scan_data):
-        """Publish LaserScan from Unity (optional)."""
-        scan = LaserScan()
-        scan.header.stamp = self.get_clock().now().to_msg()
-        scan.header.frame_id = 'laser_frame'
-        scan.angle_min = scan_data['angle_min']
-        scan.angle_max = scan_data['angle_max']
-        scan.angle_increment = scan_data['angle_increment']
-        scan.range_min = scan_data['range_min']
-        scan.range_max = scan_data['range_max']
-        scan.ranges = scan_data['ranges']
-        self.scan_pub.publish(scan)
-
     # ========== MAIN LOOP: Publish Odom Periodically ==========
     def spin_loop(self):
         """Main loop: publish odometry at fixed rate."""
@@ -366,15 +262,11 @@ class SimpleBridge(Node):
             rate.sleep()
 
     def destroy_node(self):
-        """Cleanup serial and TCP connections."""
+        """Cleanup serial connections."""
         if self.stm32_ser:
             self.stm32_ser.close()
         if self.arduino_ser:
             self.arduino_ser.close()
-        if self.sensor_conn:
-            self.sensor_conn.close()
-        if self.cmd_conn:
-            self.cmd_conn.close()
         super().destroy_node()
 
 def main(args=None):
