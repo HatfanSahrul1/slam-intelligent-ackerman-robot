@@ -25,16 +25,22 @@ class SimpleBridge(Node):
         
         # ========== SERIAL PORT CONFIG ==========
         # STM32: velocity input (m/s) + command output
-        self.declare_parameter('stm32_port', '/dev/ttyUSB0')  # ✅ Sesuai test script Anda
+        self.declare_parameter('stm32_port')
         self.stm32_port = self.get_parameter('stm32_port').value
         self.stm32_baud = 115200
         self.stm32_ser = None
         
         # Arduino: IMU yaw input (degrees)
-        self.declare_parameter('arduino_port', '/dev/ttyUSB1')
+        self.declare_parameter('arduino_port')
         self.arduino_port = self.get_parameter('arduino_port').value
         self.arduino_baud = 115200
         self.arduino_ser = None
+
+        if not self.stm32_port or not self.arduino_port:
+            self.get_logger().error(
+                'Parameter stm32_port dan arduino_port wajib di-set dari launch file.'
+            )
+            raise RuntimeError('Missing required serial port parameters from launcher')
         
         # ========== ROS SETUP ==========
         self.tf_broadcaster = TransformBroadcaster(self)
